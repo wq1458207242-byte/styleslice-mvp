@@ -1,6 +1,7 @@
 import { Copy, Download, GitBranch, ImagePlus, Play, RotateCcw, Trash2 } from 'lucide-react';
 import type { ChangeEvent } from 'react';
-import type { WorkflowEdge, WorkflowNode, WorkflowNodeData } from '../types/workflow';
+import { COMPONENT_CATEGORIES, componentTypesFromPlan, normalizeComponentPlan, selectedComponentSpecs } from '../data/componentCatalog';
+import type { ComponentSpec, WorkflowEdge, WorkflowNode, WorkflowNodeData } from '../types/workflow';
 
 interface InspectorProps {
   node?: WorkflowNode;
@@ -13,6 +14,128 @@ interface InspectorProps {
   onDuplicate: (id: string) => void;
   onDecomposeImages: (id: string) => void;
   onExport: () => void;
+}
+
+function parseCustomTypes(value: string) {
+  return value.split(/[,，\n]/).map((item) => item.trim()).filter(Boolean);
+}
+
+function baseComponentLabel(label: string) {
+  return label.replace(/\d+$/, '');
+}
+
+function ComponentPlanEditor({
+  node,
+  onChange,
+}: {
+  node: WorkflowNode;
+  onChange: (id: string, data: Partial<WorkflowNodeData>) => void;
+}) {
+  const plan = normalizeComponentPlan(node.data.componentPlan, node.data.componentTypes);
+  const selected = selectedComponentSpecs(plan);
+  const expandedTypes = componentTypesFromPlan(plan);
+  const catalogLabels = new Set(plan.map((item) => item.label));
+  const customTypes = (node.data.componentTypes ?? []).filter((type) => {
+    const baseLabel = baseComponentLabel(type);
+    return !catalogLabels.has(type) && !catalogLabels.has(baseLabel);
+  });
+  const totalCount = expandedTypes.length + customTypes.length;
+  const estimatedSheets = Math.max(1, Math.ceil(Math.max(totalCount, 1) / 8));
+
+  const commitPlan = (next: ComponentSpec[], nextCustomTypes = customTypes) => {
+    onChange(node.id, {
+      componentPlan: next,
+      componentTypes: [...componentTypesFromPlan(next), ...nextCustomTypes],
+    });
+  };
+
+  const patchItem = (id: string, patch: Partial<ComponentSpec>) => {
+    commitPlan(plan.map((item) => (item.id === id ? { ...item, ...patch } : item)));
+  };
+
+  const applyPreset = (mode: 'core' | 'screen' | 'economy') => {
+    const next = plan.map((item) => {
+      if (mode === 'core') {
+        const enabled = ['button', 'panel', 'badge', 'progress', 'dialog', 'avatar'].includes(item.id);
+        return { ...item, enabled, count: ['button', 'panel'].includes(item.id) ? 2 : 1 };
+      }
+      if (mode === 'screen') {
+        const enabled = ['button', 'tab', 'panel', 'dialog', 'card', 'banner', 'progress', 'avatar', 'quickEntry'].includes(item.id);
+        return { ...item, enabled, count: ['button', 'quickEntry'].includes(item.id) ? 3 : 1 };
+      }
+      const enabled = ['resourceIcon', 'coupon', 'reward', 'badge', 'toast'].includes(item.id);
+      return { ...item, enabled, count: ['resourceIcon', 'badge'].includes(item.id) ? 4 : 2 };
+    });
+    commitPlan(next);
+  };
+
+  return (
+    <div className="component-plan compact">
+      <div className="component-plan-summary">
+        <div>
+          <span>组件生产计划</span>
+          <strong>{selected.length} 类 / {totalCount} 个资产</strong>
+          <small>预计 {estimatedSheets} 张组件板。数量会同步影响 prompt、格子和切片命名。</small>
+        </div>
+        <div className="component-plan-presets">
+          <button type="button" onClick={() => applyPreset('core')}>核心 UI</button>
+          <button type="button" onClick={() => applyPreset('screen')}>界面套件</button>
+          <button type="button" onClick={() => applyPreset('economy')}>资源奖励</button>
+        </div>
+      </div>
+
+      {COMPONENT_CATEGORIES.map((category) => {
+        const categoryItems = category.items
+          .map((catalogItem) => plan.find((entry) => entry.id === catalogItem.id))
+          .filter((item): item is ComponentSpec => Boolean(item));
+        const activeItems = categoryItems.filter((item) => item.enabled);
+        const activeCount = activeItems.reduce((sum, item) => sum + item.count, 0);
+        return (
+          <details className="component-category" key={category.id} open={activeItems.length > 0}>
+            <summary className="component-category-header">
+              <div>
+                <strong>{category.label}</strong>
+                <small>{category.description}</small>
+              </div>
+              <span>{activeItems.length} 类 / {activeCount} 个</span>
+            </summary>
+            <div className="component-spec-grid">
+              {categoryItems.map((item) => (
+                <label className={`component-spec-row ${item.enabled ? 'active' : ''}`} key={item.id}>
+                  <input
+                    type="checkbox"
+                    checked={item.enabled}
+                    onChange={(event) => patchItem(item.id, { enabled: event.target.checked })}
+                  />
+                  <span>{item.label}</span>
+                  <input
+                    aria-label={`${item.label} 数量`}
+                    className="component-count-input"
+                    type="number"
+                    min={1}
+                    max={8}
+                    value={item.count}
+                    disabled={!item.enabled}
+                    onChange={(event) => patchItem(item.id, { count: Math.max(1, Math.min(8, Number(event.target.value) || 1)) })}
+                  />
+                </label>
+              ))}
+            </div>
+          </details>
+        );
+      })}
+
+      <label className="field">
+        <span>自定义补充组件</span>
+        <textarea
+          value={customTypes.join(', ')}
+          onChange={(event) => commitPlan(plan, parseCustomTypes(event.target.value))}
+          rows={2}
+          placeholder="例如：排行榜条目, 抽卡入口, Boss 血条"
+        />
+      </label>
+    </div>
+  );
 }
 
 export function Inspector({
@@ -37,15 +160,11 @@ export function Inspector({
         <div className="inspector-content">
           <div className="edge-card">
             <GitBranch size={18} />
-            <div>
-              <strong>{selectedEdge.source}</strong>
-              <span>→</span>
-              <strong>{selectedEdge.target}</strong>
-            </div>
+            <div><strong>{selectedEdge.source}</strong><span>→</span><strong>{selectedEdge.target}</strong></div>
           </div>
           <div className="shortcut-card">
             <strong>快捷操作</strong>
-            <p>Ctrl + 左键点击任意连接线，可直接断开该连接。选中连接线后按 Delete 也可以删除。</p>
+            <p>Ctrl + 左键点击连接线可直接断开；选中连接线后按 Delete 也可删除。</p>
           </div>
         </div>
       </aside>
@@ -95,6 +214,7 @@ export function Inspector({
             <small>{node.data.durationMs ? `${node.data.durationMs} ms` : node.data.description}</small>
           </div>
         </div>
+
         <label className="field">
           <span>节点名称</span>
           <input value={node.data.title} onChange={(event) => onChange(node.id, { title: event.target.value })} />
@@ -107,9 +227,21 @@ export function Inspector({
           </label>
         )}
 
+        {node.data.kind === 'screen' && (
+          <label className="field">
+            <span>界面生成提示词</span>
+            <textarea
+              value={node.data.text ?? ''}
+              onChange={updateText}
+              rows={6}
+              placeholder="例如：完整的游戏个人信息界面，顶部导航，左侧角色展示，右侧属性卡片，底部两个主要按钮"
+            />
+          </label>
+        )}
+
         {node.data.kind === 'images' && (
           <div className="field">
-            <span>参考图（推荐 3–5 张）</span>
+            <span>参考图（推荐 3-5 张）</span>
             <label className="upload-zone">
               <ImagePlus size={22} />
               <strong>选择图片</strong>
@@ -129,12 +261,7 @@ export function Inspector({
                 </button>
               ))}
             </div>
-            <button
-              className="secondary-button full-width-button"
-              type="button"
-              onClick={() => onDecomposeImages(node.id)}
-              disabled={(node.data.images?.length ?? 0) === 0}
-            >
+            <button className="secondary-button full-width-button" type="button" onClick={() => onDecomposeImages(node.id)} disabled={(node.data.images?.length ?? 0) === 0}>
               拆解参考图
             </button>
           </div>
@@ -157,9 +284,7 @@ export function Inspector({
             {node.data.stylePack.visualEvidence && node.data.stylePack.visualEvidence.length > 0 && (
               <div className="evidence-box">
                 <span>参考图证据</span>
-                <ul>
-                  {node.data.stylePack.visualEvidence.map((item) => <li key={item}>{item}</li>)}
-                </ul>
+                <ul>{node.data.stylePack.visualEvidence.map((item) => <li key={item}>{item}</li>)}</ul>
               </div>
             )}
             <label className="field">
@@ -174,24 +299,24 @@ export function Inspector({
         )}
 
         {node.data.stylePreview && <img className="large-preview" src={node.data.stylePreview.dataUrl} alt="风格提示词效果预览" />}
+        {node.data.screenImage && <img className="large-preview" src={node.data.screenImage.dataUrl} alt="完整界面生成预览" />}
+
         {node.data.analysisItems && node.data.analysisItems.length > 0 && (
           <div className="evidence-box">
             <span>拆解结果</span>
-            <ul>
-              {node.data.analysisItems.map((item) => <li key={item}>{item}</li>)}
-            </ul>
+            <ul>{node.data.analysisItems.map((item) => <li key={item}>{item}</li>)}</ul>
           </div>
         )}
+
         {node.data.extractedAssets && node.data.extractedAssets.length > 0 && (
           <div className="field">
             <span>候选拆解资产</span>
             <div className="slice-grid">
-              {node.data.extractedAssets.map((asset) => (
-                <img key={asset.id} src={asset.dataUrl} alt={asset.name} title={asset.name} />
-              ))}
+              {node.data.extractedAssets.map((asset) => <img key={asset.id} src={asset.dataUrl} alt={asset.name} title={asset.name} />)}
             </div>
           </div>
         )}
+
         {node.data.classifications && node.data.classifications.length > 0 && (
           <div className="evidence-box">
             <span>AI 视觉分类</span>
@@ -204,38 +329,8 @@ export function Inspector({
             </ul>
           </div>
         )}
-        {node.data.kind === 'components' && (
-          <>
-            <label className="field">
-              <span>组件类型列表</span>
-              <textarea
-                value={(node.data.componentTypes ?? []).join(', ')}
-                onChange={(event) => onChange(node.id, {
-                  componentTypes: event.target.value.split(/[,，\n]/).map((item) => item.trim()).filter(Boolean),
-                })}
-                rows={4}
-                placeholder="按钮, 面板, 徽章, 进度条, 对话框, 头像框"
-              />
-            </label>
-            <fieldset className="field checkbox-grid">
-              <legend>快捷模板</legend>
-              {['按钮', '面板', '徽章', '进度条', '对话框', '头像框', '任务卡片', '资源图标'].map((type) => (
-                <label key={type}>
-                  <input
-                    type="checkbox"
-                    checked={node.data.componentTypes?.includes(type)}
-                    onChange={(event) => onChange(node.id, {
-                      componentTypes: event.target.checked
-                        ? Array.from(new Set([...(node.data.componentTypes ?? []), type]))
-                        : (node.data.componentTypes ?? []).filter((item) => item !== type),
-                    })}
-                  />
-                  {type}
-                </label>
-              ))}
-            </fieldset>
-          </>
-        )}
+
+        {node.data.kind === 'components' && <ComponentPlanEditor node={node} onChange={onChange} />}
 
         {node.data.sheet && <img className="large-preview" src={node.data.sheet.dataUrl} alt="组件板预览" />}
         {node.data.slices && node.data.slices.length > 0 && (

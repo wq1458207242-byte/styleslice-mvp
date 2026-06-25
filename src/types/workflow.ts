@@ -4,6 +4,7 @@ export type NodeKind =
   | 'text'
   | 'images'
   | 'style'
+  | 'screen'
   | 'components'
   | 'slice'
   | 'export'
@@ -65,6 +66,15 @@ export interface GenerationQualityReport {
   promptSummary?: string;
 }
 
+export interface ComponentSpec {
+  id: string;
+  label: string;
+  category: string;
+  enabled: boolean;
+  count: number;
+  promptHint?: string;
+}
+
 export interface AiTestResult {
   id: 'proxy' | 'text' | 'vision' | 'image';
   label: string;
@@ -83,7 +93,9 @@ export interface WorkflowNodeData extends Record<string, unknown> {
   activeImageIndex?: number;
   stylePack?: StylePack;
   stylePreview?: AssetImage;
+  screenImage?: AssetImage;
   componentTypes?: string[];
+  componentPlan?: ComponentSpec[];
   sheet?: AssetImage;
   slices?: SliceAsset[];
   analysisItems?: string[];

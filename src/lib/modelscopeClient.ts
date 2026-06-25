@@ -1,3 +1,4 @@
+import { composeGeneratedComponentSheet } from './imagePipeline';
 import type { AiTestResult, AssetClassification, AssetImage, GenerationQualityReport, ModelScopeSettings, StylePack } from '../types/workflow';
 
 const defaultTaskPaths = [
@@ -311,8 +312,39 @@ const COMPONENT_TYPE_DESCRIPTIONS: Record<string, string> = {
 };
 
 function describeComponentTypes(componentTypes: string[]) {
+  const modernDescriptions: Record<string, string> = {
+    按钮: 'empty rounded action button, no text, clear pressable bevel',
+    面板: 'empty reusable content panel, sliced-friendly frame, no content inside',
+    徽章: 'small UI badge or medal frame, abstract icon accent only, no animal face',
+    进度条: 'progress bar frame with fill track, no text or numbers',
+    对话框: 'empty dialog box frame, title area optional but no letters',
+    头像框: 'empty avatar frame, no portrait, no face, no character inside',
+    任务卡片: 'empty quest card container, no readable text',
+    资源图标: 'simple resource icon in the same UI material, no mascot',
+    标签页: 'empty tab selector, active and inactive frame language, no text',
+    开关: 'toggle switch control, clean state indicator, no icon text',
+    滑杆: 'horizontal slider track with knob, no numbers',
+    横幅条: 'wide banner ribbon or header strip, no text',
+    轻提示: 'small toast notification container, no words',
+    奖励框: 'empty reward slot frame, sparkle accents, no item inside',
+    快速入口: 'small square menu entry tile, icon placeholder only, no text',
+    票券: 'empty ticket or coupon UI asset, perforated edges, no text',
+  };
+  const grouped = new Map<string, number>();
+  componentTypes.forEach((rawType) => {
+    const baseType = rawType.replace(/\d+$/, '');
+    grouped.set(baseType, (grouped.get(baseType) ?? 0) + 1);
+  });
   return componentTypes
-    .map((type) => COMPONENT_TYPE_DESCRIPTIONS[type] ? `${type} (${COMPONENT_TYPE_DESCRIPTIONS[type]})` : `${type} (reusable game UI component, no text)`)
+    .map((type) => {
+      const baseType = type.replace(/\d+$/, '');
+      const variantCount = grouped.get(baseType) ?? 1;
+      const variantNote = variantCount > 1 ? `, variant ${type.replace(baseType, '') || '1'} of ${variantCount}` : '';
+      const description = modernDescriptions[baseType] ?? COMPONENT_TYPE_DESCRIPTIONS[baseType] ?? COMPONENT_TYPE_DESCRIPTIONS[type];
+      return description
+        ? `${type} (${description}${variantNote})`
+        : `${type} (reusable game UI component, no text${variantNote})`;
+    })
     .join('; ');
 }
 
@@ -696,13 +728,51 @@ Keep a clean layout, isolated assets, consistent style, transparent or simple ne
   return generateImage(settings, prompt, style.negativePrompt, `${settings.provider || 'ai'}-style-preview.png`);
 }
 
+export async function generateScreenImageWithModelScope(settings: ModelScopeSettings, style: StylePack, screenPrompt: string): Promise<AssetImage> {
+  const prompt = `${style.prompt}
+Create one complete polished game UI screen mockup, not a sprite sheet.
+Screen requirement: ${screenPrompt || 'a complete game profile / character information interface'}.
+Use the reference-derived color palette, material, border shape, glow, shadow, icon ornament density, and overall art direction.
+The image should look like a coherent in-game interface: background layer, top navigation, major content panels, cards, progress/status area, and clear action buttons.
+Use placeholder UI marks instead of readable text. Do not include watermark, signature, real app screenshot, web browser chrome, messy collage, or unrelated extra panels.
+Keep a clean 16:9 layout, high quality, production concept art for game UI.`;
+  return generateImage(settings, prompt, style.negativePrompt, `${settings.provider || 'ai'}-screen.png`);
+}
+
 export async function generateComponentSheetWithModelScope(settings: ModelScopeSettings, style: StylePack, componentTypes: string[]): Promise<AssetImage> {
+  const assets = await generateComponentAssetsWithModelScope(settings, style, componentTypes);
+  return composeGeneratedComponentSheet(assets, componentTypes);
+}
+
+export async function generateComponentAssetsWithModelScope(settings: ModelScopeSettings, style: StylePack, componentTypes: string[]): Promise<AssetImage[]> {
+  const assets: AssetImage[] = [];
+  for (const [index, componentType] of componentTypes.entries()) {
+    const componentDescription = describeComponentTypes([componentType]);
+    const prompt = `${style.prompt}
+Create exactly ONE isolated reusable game UI component asset.
+Requested component: ${componentDescription}.
+Instance index: ${index + 1} of ${componentTypes.length}.
+Requirements:
+- draw only this one requested UI component, centered, full object visible
+- no extra bubbles, stars, loose icons, stickers, characters, mascots, faces, animals, text, watermark, or second component
+- preserve the reference-derived palette, material, border treatment, bevel, glow, shadow, and ornament density
+- transparent background if supported, otherwise plain white or neutral background
+- suitable for PNG slicing and Unity UI import`;
+    const asset = await generateImage(settings, prompt, style.negativePrompt, `${String(index + 1).padStart(2, '0')}-${componentType}.png`);
+    assets.push(asset);
+  }
+  return assets;
+}
+
+export async function generateComponentSheetBatchWithModelScope(settings: ModelScopeSettings, style: StylePack, componentTypes: string[]): Promise<AssetImage> {
   const componentDescriptions = describeComponentTypes(componentTypes);
   const rows = Math.ceil(componentTypes.length / 2);
+  const batchCount = Math.max(1, Math.ceil(componentTypes.length / 8));
   const prompt = `${style.prompt}
 Create a production-oriented game UI sprite sheet containing these separate reusable UI components: ${componentDescriptions}.
 Requirements:
 - exact layout: 2 columns x ${rows} rows, one centered component per cell, clear even spacing
+- total requested cells: ${componentTypes.length}; expected production batches if split manually: ${batchCount}; every cell must contain one complete isolated asset
 - each asset must be a UI control/container, not a character, not a mascot, not a sticker
 - each component must be visually different by function but share the same reference-derived UI art style
 - isolated assets with clear padding around each item, full object visible, no overlap

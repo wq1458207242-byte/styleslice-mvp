@@ -15,6 +15,7 @@ import {
   type NodeTypes,
 } from '@xyflow/react';
 import JSZip from 'jszip';
+import { componentTypesFromPlan, normalizeComponentPlan } from '../data/componentCatalog';
 import { createNodeData, NODE_ORDER, NODE_REGISTRY } from '../data/nodeRegistry';
 import { dataUrlToBlob } from '../lib/imagePipeline';
 import { DEFAULT_MODELSCOPE_SETTINGS, PROVIDER_PRESETS } from '../lib/modelscopeClient';
@@ -31,7 +32,7 @@ import type {
 } from '../types/workflow';
 import { AiSettingsPanel } from './AiSettingsPanel';
 import { Inspector } from './Inspector';
-import { NodePalette } from './NodePalette';
+import { NodePalette, NODE_PALETTE_DRAG_TYPE } from './NodePalette';
 import { StatusBar } from './StatusBar';
 import { StudioNode } from './StudioNode';
 import { TopBar } from './TopBar';
@@ -61,6 +62,7 @@ const LAYOUT_COLUMNS: Record<NodeKind, number> = {
   icon: 1,
   typography: 1,
   style: 1,
+  screen: 2,
   components: 2,
   slice: 3,
   export: 4,
@@ -285,6 +287,10 @@ function normalizeNodes(nodes: WorkflowNode[]) {
     if (node.data.kind === 'components') {
       normalizedData.componentTypes = node.data.componentTypes?.length ? node.data.componentTypes : ['按钮', '面板', '徽章', '进度条', '对话框', '头像框'];
     }
+    if (node.data.kind === 'components') {
+      normalizedData.componentPlan = normalizeComponentPlan(node.data.componentPlan, node.data.componentTypes);
+      normalizedData.componentTypes = componentTypesFromPlan(normalizedData.componentPlan, node.data.componentTypes);
+    }
     return { ...node, data: normalizedData };
   });
 }
@@ -375,6 +381,7 @@ export function Workspace() {
   const [selectedEdgeId, setSelectedEdgeId] = useState<string>();
   const [running, setRunning] = useState(false);
   const [saved, setSaved] = useState(true);
+  const [saving, setSaving] = useState(false);
   const [quickCreateMenu, setQuickCreateMenu] = useState<QuickCreateMenuState>();
   const [decomposeSourceId, setDecomposeSourceId] = useState<string>();
   const [decomposeKinds, setDecomposeKinds] = useState<NodeKind[]>(['palette', 'componentLibrary', 'background', 'ip', 'icon', 'typography']);
@@ -436,6 +443,21 @@ export function Workspace() {
     ]);
     setSelectedId(id);
     setSaved(false);
+  }, [setNodes]);
+
+  const addNodeAt = useCallback((kind: NodeKind, position: { x: number; y: number }) => {
+    const id = `${kind}-${crypto.randomUUID().slice(0, 8)}`;
+    const node: WorkflowNode = {
+      id,
+      type: 'studio',
+      position,
+      data: createNodeData(kind),
+    };
+    setNodes((current) => [...current, node]);
+    setSelectedId(id);
+    setSelectedEdgeId(undefined);
+    setSaved(false);
+    return node;
   }, [setNodes]);
 
   const addImagesNodeAt = useCallback((images: AssetImage[], position: { x: number; y: number }, title = '参考图组') => {
@@ -607,6 +629,7 @@ export function Workspace() {
       message: undefined,
       durationMs: undefined,
       stylePreview: undefined,
+      screenImage: undefined,
       sheet: undefined,
       slices: undefined,
     });
@@ -688,11 +711,22 @@ export function Workspace() {
   }), [aiSettings, edges, nodes, projectId, projectSettings]);
 
   const saveToLocal = useCallback(() => {
+    setSaving(true);
     const result = saveProjectSnapshot(makeSnapshot(), projects);
     setProjectId(result.snapshot.id ?? projectId);
     setProjects(result.projects);
     setSaved(true);
+    window.setTimeout(() => setSaving(false), 260);
   }, [makeSnapshot, projectId, projects]);
+
+  useEffect(() => {
+    if (saved || running) return undefined;
+    setSaving(false);
+    const timer = window.setTimeout(() => {
+      saveToLocal();
+    }, 1500);
+    return () => window.clearTimeout(timer);
+  }, [running, saveToLocal, saved]);
 
   const exportProjectJson = useCallback(() => {
     const snapshot: ProjectSnapshot = {
@@ -1005,7 +1039,8 @@ export function Workspace() {
   const handleCanvasDragOver = useCallback((event: ReactDragEvent<HTMLElement>) => {
     const hasFiles = Array.from(event.dataTransfer.items ?? []).some((item) => item.kind === 'file');
     const hasInternalImage = Boolean(event.dataTransfer.types.includes('application/x-styleslice-image'));
-    if (hasFiles || hasInternalImage) {
+    const hasPaletteNode = Boolean(event.dataTransfer.types.includes(NODE_PALETTE_DRAG_TYPE));
+    if (hasFiles || hasInternalImage || hasPaletteNode) {
       event.preventDefault();
       event.dataTransfer.dropEffect = hasInternalImage ? 'move' : 'copy';
     }
@@ -1014,6 +1049,13 @@ export function Workspace() {
   const handleCanvasDrop = useCallback(async (event: ReactDragEvent<HTMLElement>) => {
     const position = flowPositionFromClient(event.clientX, event.clientY);
     const targetImagesNode = targetImagesNodeFromEvent(event);
+    const paletteNodeKind = event.dataTransfer.getData(NODE_PALETTE_DRAG_TYPE) as NodeKind;
+    if (paletteNodeKind && NODE_REGISTRY[paletteNodeKind]) {
+      event.preventDefault();
+      addNodeAt(paletteNodeKind, position);
+      return;
+    }
+
     const internalPayload = event.dataTransfer.getData('application/x-styleslice-image');
     if (internalPayload) {
       event.preventDefault();
@@ -1034,7 +1076,7 @@ export function Workspace() {
     const images = await filesToAssetImages(files);
     if (targetImagesNode) mergeImagesIntoNode(targetImagesNode.id, images);
     else addImagesNodeAt(images, position, images.length > 1 ? '拖入参考图组' : images[0]?.name.replace(/\.[^.]+$/, '') || '拖入参考图');
-  }, [addImagesNodeAt, flowPositionFromClient, mergeImagesIntoNode, moveImageFromNode, targetImagesNodeFromEvent]);
+  }, [addImagesNodeAt, addNodeAt, flowPositionFromClient, mergeImagesIntoNode, moveImageFromNode, targetImagesNodeFromEvent]);
 
   const handleNodeDragStart = useCallback<OnNodeDrag<WorkflowNode>>((event, node) => {
     if (!event.altKey) return;
@@ -1134,6 +1176,7 @@ export function Workspace() {
       <TopBar
         projectName={projectSettings.name}
         saved={saved}
+        saving={saving}
         running={running}
         aiEnabled={aiSettings.enabled}
         onProjectNameChange={renameProject}
@@ -1147,7 +1190,7 @@ export function Workspace() {
         onResetRunState={resetRunState}
       />
       <div className="workspace-grid">
-        <NodePalette onAddNode={addNode} />
+        <NodePalette />
         <main className="canvas-shell" onDragOver={handleCanvasDragOver} onDrop={handleCanvasDrop}>
           <div className="canvas-label"><span>WORKFLOW /</span> 资产生成主流程</div>
           <div className="shortcut-hints" aria-label="快捷键提示">

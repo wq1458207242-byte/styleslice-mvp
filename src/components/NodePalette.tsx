@@ -3,11 +3,9 @@ import { useMemo, useState } from 'react';
 import { NODE_ORDER, NODE_REGISTRY } from '../data/nodeRegistry';
 import type { NodeKind } from '../types/workflow';
 
-interface NodePaletteProps {
-  onAddNode: (kind: NodeKind) => void;
-}
+export const NODE_PALETTE_DRAG_TYPE = 'application/x-styleslice-node-kind';
 
-export function NodePalette({ onAddNode }: NodePaletteProps) {
+export function NodePalette() {
   const [query, setQuery] = useState('');
   const visibleKinds = useMemo(() => {
     const keyword = query.trim().toLowerCase();
@@ -37,7 +35,18 @@ export function NodePalette({ onAddNode }: NodePaletteProps) {
           const definition = NODE_REGISTRY[kind];
           const Icon = definition.icon;
           return (
-            <button key={kind} className="palette-item" onClick={() => onAddNode(kind)}>
+            <button
+              key={kind}
+              className="palette-item"
+              draggable
+              onDragStart={(event) => {
+                event.dataTransfer.effectAllowed = 'copy';
+                event.dataTransfer.setData(NODE_PALETTE_DRAG_TYPE, kind);
+                event.dataTransfer.setData('text/plain', definition.label);
+              }}
+              title="拖拽到画布中添加节点"
+              type="button"
+            >
               <span className="palette-icon" style={{ color: definition.color }}><Icon size={16} /></span>
               <span><strong>{definition.label}</strong><small>{definition.description}</small></span>
               <ChevronRight size={14} />

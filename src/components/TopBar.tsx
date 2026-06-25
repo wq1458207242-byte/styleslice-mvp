@@ -3,6 +3,7 @@ import { Bot, Cloud, Download, FolderKanban, LayoutGrid, Play, Plus, RotateCcw, 
 interface TopBarProps {
   projectName: string;
   saved: boolean;
+  saving: boolean;
   running: boolean;
   aiEnabled: boolean;
   onProjectNameChange: (name: string) => void;
@@ -19,6 +20,7 @@ interface TopBarProps {
 export function TopBar({
   projectName,
   saved,
+  saving,
   running,
   aiEnabled,
   onProjectNameChange,
@@ -31,6 +33,9 @@ export function TopBar({
   onAutoLayout,
   onResetRunState,
 }: TopBarProps) {
+  const saveStatusClass = saving ? 'saving' : saved ? 'saved' : 'dirty';
+  const saveStatusText = saving ? '正在自动保存…' : saved ? '已保存到本地' : '有未保存更改';
+
   return (
     <header className="topbar">
       <div className="brand">
@@ -46,7 +51,7 @@ export function TopBar({
           onChange={(event) => onProjectNameChange(event.target.value)}
           aria-label="项目名称"
         />
-        <small><Cloud size={12} />{saved ? '已保存到本地' : '有未保存更改'}</small>
+        <small className={`save-status ${saveStatusClass}`}><Cloud size={12} />{saveStatusText}</small>
       </div>
       <div className="topbar-actions">
         <button className="secondary-button compact-button" onClick={onNewProject} title="新建项目">

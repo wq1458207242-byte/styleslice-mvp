@@ -22,7 +22,7 @@ function StudioNodeView({ data, selected }: NodeProps<WorkflowNode>) {
   const imageCount = nodeData.images?.length ?? 0;
   const activeImageIndex = Math.min(Math.max(nodeData.activeImageIndex ?? 0, 0), Math.max(imageCount - 1, 0));
   const activeImage = nodeData.images?.[activeImageIndex];
-  const preview = data.stylePreview?.dataUrl ?? data.sheet?.dataUrl ?? activeImage?.dataUrl ?? data.slices?.[0]?.dataUrl;
+  const preview = data.screenImage?.dataUrl ?? data.stylePreview?.dataUrl ?? data.sheet?.dataUrl ?? activeImage?.dataUrl ?? data.slices?.[0]?.dataUrl;
   const message = data.message && data.message.length > 84 ? `${data.message.slice(0, 84)}…` : data.message;
 
   return (
@@ -75,6 +75,7 @@ function StudioNodeView({ data, selected }: NodeProps<WorkflowNode>) {
         {data.kind === 'images' && <small>{imageCount} / 5 张参考图{imageCount > 1 ? ` · 主图 ${activeImageIndex + 1}` : ''}</small>}
         {data.kind === 'style' && data.stylePack && <small>{data.stylePack.source === 'modelscope' ? 'AI 风格包' : '本地风格包'} · {data.stylePack.consistency}/100</small>}
         {data.kind === 'components' && <small>{data.componentTypes?.length ?? 0} 类组件 · {data.sheet ? '已有组件板' : '待生成'}</small>}
+        {data.kind === 'screen' && <small>{data.screenImage ? '已有界面图' : '待生成完整界面'}</small>}
         {data.kind === 'slice' && <small>{data.slices?.length ?? 0} 个透明切片</small>}
         {data.kind === 'export' && <small>{data.slices?.length ?? 0} 个导出资产</small>}
         {data.analysisItems && data.analysisItems.length > 0 && <small>{data.analysisItems.length} 条拆解结果</small>}

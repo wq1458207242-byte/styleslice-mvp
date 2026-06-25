@@ -1,5 +1,6 @@
-import { Brackets, FileArchive, ImagePlus, Layers3, Palette, Type, LayoutTemplate, Image, Sparkles, Smile, CaseSensitive } from 'lucide-react';
+import { Brackets, FileArchive, ImagePlus, Layers3, Palette, Type, LayoutTemplate, Image, Sparkles, Smile, CaseSensitive, AppWindow } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
+import { DEFAULT_COMPONENT_PLAN, componentTypesFromPlan } from './componentCatalog';
 import type { NodeKind, WorkflowNodeData } from '../types/workflow';
 
 export interface NodeDefinition {
@@ -104,6 +105,18 @@ export const NODE_REGISTRY: Record<NodeKind, NodeDefinition> = {
     accepts: ['text', 'images'],
     defaults: {},
   },
+  screen: {
+    kind: 'screen',
+    label: '界面生成',
+    shortLabel: '界面',
+    icon: AppWindow,
+    color: '#7cc7f2',
+    description: '根据设计风格包和界面需求生成完整游戏 UI 界面参考图',
+    accepts: ['style', 'text'],
+    defaults: {
+      text: '生成一个完整的游戏个人信息/角色资料界面，包含顶部导航、头像或角色展示区、信息卡片、进度/数值区和底部操作按钮。',
+    },
+  },
   components: {
     kind: 'components',
     label: '原子组件板',
@@ -136,15 +149,20 @@ export const NODE_REGISTRY: Record<NodeKind, NodeDefinition> = {
   },
 };
 
-export const NODE_ORDER: NodeKind[] = ['text', 'images', 'palette', 'componentLibrary', 'background', 'ip', 'icon', 'typography', 'style', 'components', 'slice', 'export'];
+export const NODE_ORDER: NodeKind[] = ['text', 'images', 'palette', 'componentLibrary', 'background', 'ip', 'icon', 'typography', 'style', 'screen', 'components', 'slice', 'export'];
 
 export function createNodeData(kind: NodeKind): WorkflowNodeData {
   const definition = NODE_REGISTRY[kind];
-  return {
+  const data: WorkflowNodeData = {
     kind,
     title: definition.label,
     description: definition.description,
     status: 'idle',
     ...definition.defaults,
   };
+  if (kind === 'components') {
+    data.componentPlan = DEFAULT_COMPONENT_PLAN;
+    data.componentTypes = componentTypesFromPlan(DEFAULT_COMPONENT_PLAN);
+  }
+  return data;
 }

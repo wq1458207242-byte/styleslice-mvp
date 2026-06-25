@@ -68,6 +68,7 @@ function roundedRect(context: CanvasRenderingContext2D, x: number, y: number, wi
 }
 
 function drawComponent(context: CanvasRenderingContext2D, type: string, index: number, style: StylePack) {
+  const baseType = type.replace(/\d+$/, '');
   const column = index % 2;
   const row = Math.floor(index / 2);
   const x = 48 + column * 352;
@@ -138,6 +139,132 @@ export function generateComponentSheet(style: StylePack, componentTypes: string[
   return {
     id: crypto.randomUUID(),
     name: 'component-sheet.png',
+    dataUrl: canvas.toDataURL('image/png'),
+    width: canvas.width,
+    height: canvas.height,
+  };
+}
+
+export function generateScreenMockup(style: StylePack, promptText: string): AssetImage {
+  const canvas = document.createElement('canvas');
+  canvas.width = 1280;
+  canvas.height = 720;
+  const context = canvas.getContext('2d');
+  if (!context) throw new Error('浏览器不支持 Canvas');
+
+  const [dark, mid, accent, light, extra] = style.palette.length >= 5 ? style.palette : DEFAULT_PALETTE;
+  const gradient = context.createLinearGradient(0, 0, canvas.width, canvas.height);
+  gradient.addColorStop(0, light);
+  gradient.addColorStop(0.55, `${mid}55`);
+  gradient.addColorStop(1, `${accent}44`);
+  context.fillStyle = gradient;
+  context.fillRect(0, 0, canvas.width, canvas.height);
+
+  context.fillStyle = `${extra}18`;
+  for (let i = 0; i < 12; i += 1) {
+    context.beginPath();
+    context.arc(120 + i * 96, 90 + (i % 3) * 130, 36 + (i % 4) * 10, 0, Math.PI * 2);
+    context.fill();
+  }
+
+  const drawPanel = (x: number, y: number, w: number, h: number, r = 28) => {
+    context.save();
+    context.shadowColor = `${dark}35`;
+    context.shadowBlur = 24;
+    context.shadowOffsetY = 12;
+    context.fillStyle = 'rgba(255,255,255,.78)';
+    context.strokeStyle = `${accent}aa`;
+    context.lineWidth = 4;
+    context.beginPath();
+    context.roundRect(x, y, w, h, r);
+    context.fill();
+    context.stroke();
+    context.restore();
+  };
+
+  drawPanel(66, 42, 1148, 72, 34);
+  drawPanel(86, 164, 420, 420, 36);
+  drawPanel(548, 164, 580, 150, 28);
+  drawPanel(548, 342, 580, 180, 28);
+  drawPanel(548, 552, 250, 78, 30);
+  drawPanel(830, 552, 250, 78, 30);
+
+  context.fillStyle = accent;
+  context.font = '800 34px system-ui, sans-serif';
+  context.fillText('SCREEN MOCKUP', 108, 90);
+  context.font = '600 22px system-ui, sans-serif';
+  ['NAV', 'PROFILE', 'STATS', 'ACTIONS'].forEach((text, index) => {
+    context.fillStyle = index === 0 ? accent : dark;
+    context.fillText(text, 330 + index * 160, 89);
+  });
+
+  context.fillStyle = `${mid}cc`;
+  context.beginPath();
+  context.arc(296, 352, 116, 0, Math.PI * 2);
+  context.fill();
+  context.fillStyle = `${light}ee`;
+  context.beginPath();
+  context.arc(296, 315, 52, 0, Math.PI * 2);
+  context.fill();
+  context.beginPath();
+  context.roundRect(220, 366, 152, 126, 52);
+  context.fill();
+
+  context.strokeStyle = `${accent}dd`;
+  context.lineWidth = 14;
+  [592, 650, 708].forEach((y, index) => {
+    context.beginPath();
+    context.roundRect(598, y - 390, 460 - index * 54, 24, 12);
+    context.stroke();
+  });
+  context.fillStyle = `${extra}dd`;
+  context.font = '700 24px system-ui, sans-serif';
+  context.fillText(promptText.slice(0, 34) || 'Generated full game interface', 590, 220);
+
+  return {
+    id: crypto.randomUUID(),
+    name: 'screen-mockup.png',
+    dataUrl: canvas.toDataURL('image/png'),
+    width: canvas.width,
+    height: canvas.height,
+  };
+}
+
+export async function composeGeneratedComponentSheet(assets: AssetImage[], componentTypes: string[]): Promise<AssetImage> {
+  const columns = 2;
+  const cellWidth = 352;
+  const cellHeight = 212;
+  const rows = Math.max(1, Math.ceil(componentTypes.length / columns));
+  const canvas = document.createElement('canvas');
+  canvas.width = columns * cellWidth;
+  canvas.height = rows * cellHeight;
+  const context = canvas.getContext('2d');
+  if (!context) throw new Error('浏览器不支持 Canvas');
+
+  context.clearRect(0, 0, canvas.width, canvas.height);
+  for (let index = 0; index < componentTypes.length; index += 1) {
+    const asset = assets[index];
+    if (!asset) continue;
+    const image = await loadImage(asset.dataUrl);
+    const column = index % columns;
+    const row = Math.floor(index / columns);
+    const cellX = column * cellWidth;
+    const cellY = row * cellHeight;
+    const maxWidth = cellWidth - 34;
+    const maxHeight = cellHeight - 34;
+    const sourceWidth = image.naturalWidth || asset.width || maxWidth;
+    const sourceHeight = image.naturalHeight || asset.height || maxHeight;
+    const scale = Math.min(maxWidth / sourceWidth, maxHeight / sourceHeight);
+    const drawWidth = Math.max(1, Math.round(sourceWidth * scale));
+    const drawHeight = Math.max(1, Math.round(sourceHeight * scale));
+    const drawX = cellX + Math.round((cellWidth - drawWidth) / 2);
+    const drawY = cellY + Math.round((cellHeight - drawHeight) / 2);
+    context.drawImage(image, drawX, drawY, drawWidth, drawHeight);
+  }
+
+  return {
+    id: crypto.randomUUID(),
+    name: 'component-sheet-exact.png',
     dataUrl: canvas.toDataURL('image/png'),
     width: canvas.width,
     height: canvas.height,

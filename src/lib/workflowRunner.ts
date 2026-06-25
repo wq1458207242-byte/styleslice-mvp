@@ -1,10 +1,12 @@
 import type { Edge } from '@xyflow/react';
+import { componentTypesFromPlan, normalizeComponentPlan } from '../data/componentCatalog';
 import {
   decomposeReferenceImage,
   extractPalette,
   generateAnalysisCard,
   generateAssetContactSheet,
   generateComponentSheet,
+  generateScreenMockup,
   sliceComponentSheet,
 } from './imagePipeline';
 import {
@@ -12,6 +14,7 @@ import {
   assessGeneratedImageQuality,
   classifyAssetsWithVision,
   generateComponentSheetWithModelScope,
+  generateScreenImageWithModelScope,
   generateStylePreviewWithModelScope,
   isModelScopeReady,
 } from './modelscopeClient';
@@ -259,11 +262,48 @@ const executors: Record<string, NodeExecutor> = {
     };
   },
 
+  screen: async ({ node, inputs, aiSettings }) => {
+    const stylePack = inputs.find((input) => input.data.stylePack)?.data.stylePack;
+    if (!stylePack) throw new Error('请先连接并运行设计风格包节点');
+    const upstreamText = inputs
+      .filter((input) => input.data.kind === 'text')
+      .map((input) => input.data.text)
+      .filter(Boolean)
+      .join('；');
+    const screenPrompt = [upstreamText, node.data.text].filter(Boolean).join('；') || '完整游戏主界面';
+
+    if (isModelScopeReady(aiSettings) && aiSettings.imageModel.trim()) {
+      try {
+        const screenImage = await generateScreenImageWithModelScope(aiSettings, stylePack, screenPrompt);
+        const qualityReport = await assessGeneratedImageQuality(aiSettings, screenImage, `full game UI screen: ${screenPrompt}`);
+        return {
+          screenImage,
+          qualityReport,
+          message: qualityReport.ok
+            ? `已根据风格包生成完整界面图。视觉质检：${qualityReport.score}/100`
+            : `已生成完整界面图，但视觉质检偏低：${qualityReport.score}/100。问题：${qualityReport.issues.join('；')}`,
+        };
+      } catch (error) {
+        return {
+          screenImage: generateScreenMockup(stylePack, screenPrompt),
+          message: `AI 完整界面生图失败，已回退为本地结构化界面稿。诊断：${compactError(error)}`,
+        };
+      }
+    }
+
+    return {
+      screenImage: generateScreenMockup(stylePack, screenPrompt),
+      message: '未配置生图模型，已生成本地结构化完整界面稿',
+    };
+  },
+
   components: async ({ node, inputs, aiSettings }) => {
     const stylePack = inputs.find((input) => input.data.stylePack)?.data.stylePack;
     if (!stylePack) throw new Error('请先连接并运行设计风格包节点');
     const libraryTypes = inputs.find((input) => input.data.kind === 'componentLibrary' && input.data.componentTypes?.length)?.data.componentTypes;
-    const componentTypes = node.data.componentTypes?.length ? node.data.componentTypes : libraryTypes?.length ? libraryTypes : localComponentTypes;
+    const componentPlan = normalizeComponentPlan(node.data.componentPlan, node.data.componentTypes?.length ? node.data.componentTypes : libraryTypes);
+    const componentTypes = componentTypesFromPlan(componentPlan, node.data.componentTypes?.length ? node.data.componentTypes : libraryTypes);
+    const batchCount = Math.max(1, Math.ceil(componentTypes.length / 8));
 
     if (isModelScopeReady(aiSettings) && aiSettings.imageModel.trim()) {
       try {
@@ -271,6 +311,8 @@ const executors: Record<string, NodeExecutor> = {
         const qualityReport = await assessGeneratedImageQuality(aiSettings, sheet, `component sheet: ${componentTypes.join(', ')}`);
         return {
           sheet,
+          componentPlan,
+          componentTypes,
           qualityReport,
           message: qualityReport.ok
             ? `已根据风格包调用生图模型生成 ${componentTypes.length} 类组件。视觉质检：${qualityReport.score}/100`
@@ -279,6 +321,8 @@ const executors: Record<string, NodeExecutor> = {
       } catch (error) {
         return {
           sheet: generateComponentSheet(stylePack, componentTypes),
+          componentPlan,
+          componentTypes,
           message: `AI 生图失败，已回退成本地风格化组件板。诊断：${compactError(error)}`,
         };
       }
@@ -286,6 +330,8 @@ const executors: Record<string, NodeExecutor> = {
 
     return {
       sheet: generateComponentSheet(stylePack, componentTypes),
+      componentPlan,
+      componentTypes,
       message: `未配置生图模型，已生成 ${componentTypes.length} 个本地占位组件`,
     };
   },
@@ -302,7 +348,8 @@ const executors: Record<string, NodeExecutor> = {
 
     const componentNode = inputs.find((input) => input.data.sheet);
     if (!componentNode?.data.sheet) throw new Error('请先连接并运行原子组件板节点');
-    const slices = await sliceComponentSheet(componentNode.data.sheet, componentNode.data.componentTypes ?? localComponentTypes);
+    const sliceTypes = componentTypesFromPlan(componentNode.data.componentPlan, componentNode.data.componentTypes ?? localComponentTypes);
+    const slices = await sliceComponentSheet(componentNode.data.sheet, sliceTypes);
     return { slices, message: `${slices.length} 个切片通过基础质检` };
   },
 
