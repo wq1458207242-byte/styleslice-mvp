@@ -45,15 +45,34 @@ function compactError(error: unknown) {
   return message.length > 480 ? `${message.slice(0, 480)}…` : message;
 }
 
+function nodeOutputImages(input: WorkflowNode): AssetImage[] {
+  return [
+    ...(input.data.images ?? []),
+    ...(input.data.stylePreview ? [input.data.stylePreview] : []),
+    ...(input.data.screenImage ? [input.data.screenImage] : []),
+    ...(input.data.sheet ? [input.data.sheet] : []),
+    ...(input.data.extractedAssets ?? []),
+    ...(input.data.slices ?? []),
+  ];
+}
+
 function inputImages(inputs: WorkflowNode[]) {
-  return inputs.flatMap((input) => input.data.images ?? []);
+  return inputs.flatMap(nodeOutputImages);
 }
 
 function mainInputImage(inputs: WorkflowNode[]) {
   const imageNode = inputs.find((input) => input.data.images?.length);
   const images = imageNode?.data.images ?? [];
   const index = Math.min(Math.max(imageNode?.data.activeImageIndex ?? 0, 0), Math.max(images.length - 1, 0));
-  return images[index] ?? images[0];
+  return images[index] ?? images[0] ?? inputImages(inputs)[0];
+}
+
+function firstUpstreamStylePack(inputs: WorkflowNode[]) {
+  return inputs.find((input) => input.data.stylePack)?.data.stylePack;
+}
+
+function firstUpstreamComponentTypes(inputs: WorkflowNode[]) {
+  return inputs.find((input) => input.data.componentTypes?.length)?.data.componentTypes;
 }
 
 function applyClassifications(assets: AssetImage[], classifications: AssetClassification[], fallbackCategory: string) {
@@ -100,7 +119,7 @@ async function localAssetDecomposition(
 ) {
   const images = inputImages(inputs);
   const main = mainInputImage(inputs);
-  if (!main) throw new Error('请先连接参考图节点');
+  if (!main) throw new Error('请先连接参考图、界面图、组件板或切片资产节点');
 
   const palette = await extractPalette(images);
   const rawAssets = await decomposeReferenceImage(main, kind);
@@ -124,6 +143,18 @@ async function localAssetDecomposition(
     .filter(Boolean);
 
   return {
+    stylePack: {
+      name: `${title}风格约束`,
+      description: '由上游图像资产提取的轻量风格约束，可继续连接到组件生成或界面生成节点。',
+      palette,
+      material: '由上游图像资产推导的统一材质',
+      shape: '由上游图像资产推导的形状语言',
+      decoration: '由上游图像资产推导的装饰密度',
+      prompt: `${title}, reusable game UI assets, ${palette.join(', ')}, consistent palette and material`,
+      negativePrompt: 'low quality, watermark, noisy background, inconsistent style, unreadable text',
+      consistency: 82,
+      source: 'local' as const,
+    },
     stylePreview: await generateAssetContactSheet(title, extractedAssets, palette),
     extractedAssets,
     slices,
@@ -149,7 +180,7 @@ const executors: Record<string, NodeExecutor> = {
 
   palette: async ({ inputs }) => {
     const images = inputImages(inputs);
-    if (images.length === 0) throw new Error('请先连接参考图节点');
+    if (images.length === 0) throw new Error('请先连接参考图、界面图、组件板或切片资产节点');
     const palette = await extractPalette(images);
     const lines = [
       `主色倾向：${palette[0]} / ${palette[1]}`,
@@ -210,7 +241,8 @@ const executors: Record<string, NodeExecutor> = {
   style: async ({ inputs, aiSettings }) => {
     const images = inputImages(inputs);
     const text = inputs.map((input) => input.data.text).filter(Boolean).join(' ');
-    const palette = await extractPalette(images);
+    const upstreamStylePack = firstUpstreamStylePack(inputs);
+    const palette = images.length > 0 ? await extractPalette(images) : upstreamStylePack?.palette ?? [];
 
     if (isModelScopeReady(aiSettings)) {
       const stylePack = await analyzeStyleWithModelScope(aiSettings, text, images, palette);
@@ -247,14 +279,14 @@ const executors: Record<string, NodeExecutor> = {
 
     return {
       stylePack: {
-        name: images.length > 0 ? '参考图衍生风格' : '默认游戏 UI 风格',
+        name: images.length > 0 ? '图像资产衍生风格' : upstreamStylePack?.name ?? '默认游戏 UI 风格',
         description: '本地模式根据参考图色板和文本需求生成基础风格包。',
-        palette,
-        material: '由参考图推导的统一材质',
-        shape: '清晰轮廓、可切片边框、适中圆角',
-        decoration: '装饰密度可控，避免影响 UI 可读性',
-        prompt: `${text || 'game UI kit'}, isolated UI assets, cohesive material, clean spacing, transparent background`,
-        negativePrompt: 'illegible text, watermark, merged objects, busy background, inconsistent perspective',
+        palette: palette.length ? palette : ['#f5a6c7', '#d5a1f2', '#fff1b9', '#85d1e2', '#4a90e2'],
+        material: upstreamStylePack?.material ?? '由上游图像资产推导的统一材质',
+        shape: upstreamStylePack?.shape ?? '清晰轮廓、可切片边框、适中圆角',
+        decoration: upstreamStylePack?.decoration ?? '装饰密度可控，避免影响 UI 可读性',
+        prompt: `${text || upstreamStylePack?.prompt || 'game UI kit'}, isolated UI assets, cohesive material, clean spacing, transparent background`,
+        negativePrompt: upstreamStylePack?.negativePrompt ?? 'illegible text, watermark, merged objects, busy background, inconsistent perspective',
         consistency: images.length >= 3 ? 86 : 72,
         source: 'local',
       },
@@ -263,8 +295,8 @@ const executors: Record<string, NodeExecutor> = {
   },
 
   screen: async ({ node, inputs, aiSettings }) => {
-    const stylePack = inputs.find((input) => input.data.stylePack)?.data.stylePack;
-    if (!stylePack) throw new Error('请先连接并运行设计风格包节点');
+    const stylePack = firstUpstreamStylePack(inputs);
+    if (!stylePack) throw new Error('请先连接并运行设计风格包、色板节点或其他可输出风格约束的资产分析节点');
     const upstreamText = inputs
       .filter((input) => input.data.kind === 'text')
       .map((input) => input.data.text)
@@ -298,9 +330,9 @@ const executors: Record<string, NodeExecutor> = {
   },
 
   components: async ({ node, inputs, aiSettings }) => {
-    const stylePack = inputs.find((input) => input.data.stylePack)?.data.stylePack;
-    if (!stylePack) throw new Error('请先连接并运行设计风格包节点');
-    const libraryTypes = inputs.find((input) => input.data.kind === 'componentLibrary' && input.data.componentTypes?.length)?.data.componentTypes;
+    const stylePack = firstUpstreamStylePack(inputs);
+    if (!stylePack) throw new Error('请先连接并运行设计风格包、色板节点或其他可输出风格约束的资产分析节点');
+    const libraryTypes = firstUpstreamComponentTypes(inputs);
     const componentPlan = normalizeComponentPlan(node.data.componentPlan, node.data.componentTypes?.length ? node.data.componentTypes : libraryTypes);
     const componentTypes = componentTypesFromPlan(componentPlan, node.data.componentTypes?.length ? node.data.componentTypes : libraryTypes);
     const batchCount = Math.max(1, Math.ceil(componentTypes.length / 8));

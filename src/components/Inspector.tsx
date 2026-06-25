@@ -209,6 +209,13 @@ export function Inspector({
     })));
     onChange(node.id, { images, activeImageIndex: 0 });
   };
+  const hasReusableVisualOutput = Boolean(
+    node.data.stylePreview
+    || node.data.screenImage
+    || node.data.sheet
+    || (node.data.extractedAssets?.length ?? 0) > 0
+    || (node.data.slices?.length ?? 0) > 0,
+  );
 
   return (
     <>
@@ -283,6 +290,12 @@ export function Inspector({
               拆解参考图
             </button>
           </div>
+        )}
+
+        {node.data.kind !== 'images' && hasReusableVisualOutput && (
+          <button className="secondary-button full-width-button" type="button" onClick={() => onDecomposeImages(node.id)}>
+            拆解此节点输出
+          </button>
         )}
 
         {node.data.kind === 'style' && node.data.stylePack && (

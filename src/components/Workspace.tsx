@@ -368,8 +368,8 @@ export function Workspace() {
   const [projectId, setProjectId] = useState(boot.current.snapshot.id ?? createProjectId());
   const [projectSettings, setProjectSettings] = useState<ProjectSettings>(boot.current.snapshot.settings);
   const [projects, setProjects] = useState<ProjectMeta[]>(boot.current.projects);
-  const [nodes, setNodes, onNodesChange] = useNodesState<WorkflowNode>(boot.current.snapshot.nodes ? normalizeNodes(boot.current.snapshot.nodes) : initialNodes);
-  const [edges, setEdges, onEdgesChange] = useEdgesState<WorkflowEdge>(boot.current.snapshot.edges ?? initialEdges);
+  const [nodes, setNodes, applyNodesChange] = useNodesState<WorkflowNode>(boot.current.snapshot.nodes ? normalizeNodes(boot.current.snapshot.nodes) : initialNodes);
+  const [edges, setEdges, applyEdgesChange] = useEdgesState<WorkflowEdge>(boot.current.snapshot.edges ?? initialEdges);
   const [aiSettings, setAiSettingsState] = useState<ModelScopeSettings>(normalizeAiSettings({
     ...DEFAULT_MODELSCOPE_SETTINGS,
     ...(boot.current.snapshot.aiSettings ?? {}),
@@ -382,25 +382,46 @@ export function Workspace() {
   const [running, setRunning] = useState(false);
   const [saved, setSaved] = useState(true);
   const [saving, setSaving] = useState(false);
+  const [dirtyVersion, setDirtyVersion] = useState(0);
   const [quickCreateMenu, setQuickCreateMenu] = useState<QuickCreateMenuState>();
   const [decomposeSourceId, setDecomposeSourceId] = useState<string>();
   const [decomposeKinds, setDecomposeKinds] = useState<NodeKind[]>(['palette', 'componentLibrary', 'background', 'ip', 'icon', 'typography']);
   const flowInstanceRef = useRef<ReactFlowInstance<any, WorkflowEdge> | null>(null);
   const connectStartRef = useRef<{ nodeId?: string | null; handleId?: string | null; handleType?: string | null }>({});
   const copiedNodesRef = useRef<WorkflowNode[]>([]);
+  const dirtyVersionRef = useRef(0);
+  const savedVersionRef = useRef(0);
   const nodeTypes = useMemo<NodeTypes>(() => ({ studio: StudioNode }), []);
   const selectedNode = nodes.find((node) => node.id === selectedId);
+
+  const markDirty = useCallback(() => {
+    setSaved(false);
+    setDirtyVersion((current) => {
+      const next = current + 1;
+      dirtyVersionRef.current = next;
+      return next;
+    });
+  }, []);
 
   const setAiSettings = useCallback((settings: ModelScopeSettings) => {
     const normalized = normalizeAiSettings(settings);
     setAiSettingsState(normalized);
     localStorage.setItem(AI_STORAGE_KEY, JSON.stringify(normalized));
-    setSaved(false);
   }, []);
+
+  const onNodesChange = useCallback((changes: Parameters<typeof applyNodesChange>[0]) => {
+    applyNodesChange(changes);
+    if (changes.some((change) => ['position', 'add', 'remove', 'replace'].includes(change.type))) markDirty();
+  }, [applyNodesChange, markDirty]);
+
+  const onEdgesChange = useCallback((changes: Parameters<typeof applyEdgesChange>[0]) => {
+    applyEdgesChange(changes);
+    if (changes.some((change) => ['add', 'remove', 'replace'].includes(change.type))) markDirty();
+  }, [applyEdgesChange, markDirty]);
 
   const updateNode = useCallback((id: string, patch: Partial<WorkflowNodeData>) => {
     setNodes((current) => current.map((node) => (node.id === id ? { ...node, data: { ...node.data, ...patch } } : node)));
-    setSaved(false);
+    markDirty();
   }, [setNodes]);
 
   const renderedNodes = useMemo(() => nodes.map((node) => ({
@@ -427,7 +448,7 @@ export function Workspace() {
     if (!source || !target || source.id === target.id) return;
     const id = `e-${source.id}-${target.id}-${crypto.randomUUID().slice(0, 6)}`;
     setEdges((current) => addEdge(decorateEdge({ ...connection, id }, nodes), current));
-    setSaved(false);
+    markDirty();
   }, [nodes, setEdges]);
 
   const addNode = useCallback((kind: NodeKind) => {
@@ -442,7 +463,7 @@ export function Workspace() {
       },
     ]);
     setSelectedId(id);
-    setSaved(false);
+    markDirty();
   }, [setNodes]);
 
   const addNodeAt = useCallback((kind: NodeKind, position: { x: number; y: number }) => {
@@ -456,7 +477,7 @@ export function Workspace() {
     setNodes((current) => [...current, node]);
     setSelectedId(id);
     setSelectedEdgeId(undefined);
-    setSaved(false);
+    markDirty();
     return node;
   }, [setNodes]);
 
@@ -479,7 +500,7 @@ export function Workspace() {
     setNodes((current) => [...current, node]);
     setSelectedId(id);
     setSelectedEdgeId(undefined);
-    setSaved(false);
+    markDirty();
   }, [setNodes]);
 
   const addTextNodeAt = useCallback((text: string, position: { x: number; y: number }) => {
@@ -501,7 +522,7 @@ export function Workspace() {
     setNodes((current) => [...current, node]);
     setSelectedId(id);
     setSelectedEdgeId(undefined);
-    setSaved(false);
+    markDirty();
   }, [setNodes]);
 
   const pasteCopiedNodesAt = useCallback((position?: { x: number; y: number }) => {
@@ -545,7 +566,7 @@ export function Workspace() {
     setEdges((current) => [...current, ...cloneEdges.map((edge) => decorateEdge(edge, graphNodes))]);
     setSelectedId(clones[0]?.id);
     setSelectedEdgeId(undefined);
-    setSaved(false);
+    markDirty();
     return true;
   }, [edges, nodes, setEdges, setNodes]);
 
@@ -568,7 +589,7 @@ export function Workspace() {
     setSelectedId(id);
     setSelectedEdgeId(undefined);
     setQuickCreateMenu(undefined);
-    setSaved(false);
+    markDirty();
   }, [nodes, setEdges, setNodes]);
 
   const createDecompositionNodes = useCallback(() => {
@@ -597,7 +618,7 @@ export function Workspace() {
     setSelectedId(createdNodes[0]?.id);
     setSelectedEdgeId(undefined);
     setDecomposeSourceId(undefined);
-    setSaved(false);
+    markDirty();
   }, [decomposeKinds, decomposeSourceId, nodes, setEdges, setNodes]);
 
   const duplicateNode = useCallback((id: string) => {
@@ -620,7 +641,7 @@ export function Workspace() {
     setNodes((current) => [...current, clone]);
     setSelectedId(newId);
     setSelectedEdgeId(undefined);
-    setSaved(false);
+    markDirty();
   }, [nodes, setNodes]);
 
   const resetNode = useCallback((id: string) => {
@@ -645,7 +666,7 @@ export function Workspace() {
         durationMs: undefined,
       },
     })));
-    setSaved(false);
+    markDirty();
   }, [setNodes]);
 
   const executeNode = useCallback(async (id: string) => {
@@ -695,7 +716,7 @@ export function Workspace() {
       }
     } finally {
       setRunning(false);
-      setSaved(false);
+      markDirty();
     }
   }, [aiSettings, edges, nodes, setNodes]);
 
@@ -715,18 +736,37 @@ export function Workspace() {
     const result = saveProjectSnapshot(makeSnapshot(), projects);
     setProjectId(result.snapshot.id ?? projectId);
     setProjects(result.projects);
+    savedVersionRef.current = dirtyVersionRef.current;
     setSaved(true);
     window.setTimeout(() => setSaving(false), 260);
   }, [makeSnapshot, projectId, projects]);
 
   useEffect(() => {
-    if (saved || running) return undefined;
+    if (dirtyVersion === savedVersionRef.current || running) return undefined;
     setSaving(false);
     const timer = window.setTimeout(() => {
       saveToLocal();
     }, 1500);
     return () => window.clearTimeout(timer);
-  }, [running, saveToLocal, saved]);
+  }, [dirtyVersion, running, saveToLocal]);
+
+  useEffect(() => {
+    const flushUnsavedChanges = () => {
+      if (dirtyVersionRef.current === savedVersionRef.current) return;
+      const result = saveProjectSnapshot(makeSnapshot(), projects);
+      savedVersionRef.current = dirtyVersionRef.current;
+      localStorage.setItem(ACTIVE_PROJECT_KEY, result.snapshot.id ?? projectId);
+    };
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'hidden') flushUnsavedChanges();
+    };
+    window.addEventListener('beforeunload', flushUnsavedChanges);
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+    return () => {
+      window.removeEventListener('beforeunload', flushUnsavedChanges);
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+    };
+  }, [makeSnapshot, projectId, projects]);
 
   const exportProjectJson = useCallback(() => {
     const snapshot: ProjectSnapshot = {
@@ -753,7 +793,7 @@ export function Workspace() {
     setProjects((current) => current.map((project) => (
       project.id === projectId ? { ...project, name: nextName } : project
     )));
-    setSaved(false);
+    markDirty();
   }, [projectId]);
 
   const loadProject = useCallback((id: string) => {
@@ -772,6 +812,9 @@ export function Workspace() {
     setSelectedId(undefined);
     setSelectedEdgeId(undefined);
     setProjectManagerOpen(false);
+    dirtyVersionRef.current = 0;
+    savedVersionRef.current = 0;
+    setDirtyVersion(0);
     setSaved(true);
   }, [setEdges, setNodes]);
 
@@ -785,6 +828,9 @@ export function Workspace() {
     setEdges(result.snapshot.edges);
     setSelectedId(undefined);
     setSelectedEdgeId(undefined);
+    dirtyVersionRef.current = 0;
+    savedVersionRef.current = 0;
+    setDirtyVersion(0);
     setSaved(true);
   }, [aiSettings, projects, setEdges, setNodes]);
 
@@ -843,7 +889,7 @@ export function Workspace() {
         position,
       };
     }));
-    setSaved(false);
+    markDirty();
   }, [nodes, setNodes]);
 
   const exportAssets = useCallback(async () => {
@@ -874,13 +920,13 @@ export function Workspace() {
     setNodes((current) => current.filter((node) => node.id !== id));
     setEdges((current) => current.filter((edge) => edge.source !== id && edge.target !== id));
     setSelectedId(undefined);
-    setSaved(false);
+    markDirty();
   }, [setEdges, setNodes]);
 
   const removeEdge = useCallback((id: string) => {
     setEdges((current) => current.filter((edge) => edge.id !== id));
     setSelectedEdgeId(undefined);
-    setSaved(false);
+    markDirty();
   }, [setEdges]);
 
   const removeSelection = useCallback(() => {
@@ -971,7 +1017,7 @@ export function Workspace() {
       };
     }));
     setSelectedId(targetId);
-    setSaved(false);
+    markDirty();
   }, [setNodes]);
 
   const moveImageFromNode = useCallback((sourceNodeId: string, imageId: string, targetNodeId: string | undefined, position: { x: number; y: number }) => {
@@ -1033,7 +1079,7 @@ export function Workspace() {
       return next;
     });
     if (targetNodeId) setSelectedId(targetNodeId);
-    setSaved(false);
+    markDirty();
   }, [nodes, setNodes]);
 
   const handleCanvasDragOver = useCallback((event: ReactDragEvent<HTMLElement>) => {
@@ -1097,7 +1143,7 @@ export function Workspace() {
     setNodes((current) => [...current, clone]);
     setSelectedId(newId);
     setSelectedEdgeId(undefined);
-    setSaved(false);
+    markDirty();
   }, [setNodes]);
 
   useEffect(() => {
