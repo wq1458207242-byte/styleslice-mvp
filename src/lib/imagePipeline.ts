@@ -641,17 +641,201 @@ export async function sliceComponentSheet(sheet: AssetImage, componentTypes: str
     const sourceX = (index % columns) * sourceCellWidth;
     const sourceY = Math.floor(index / columns) * sourceCellHeight;
     context.drawImage(image, sourceX, sourceY, sourceCellWidth, sourceCellHeight, 0, 0, 352, 212);
+    return postProcessComponentCell(canvas, type, index);
+  });
+}
+
+function colorDistanceSquared(data: Uint8ClampedArray, index: number, color: [number, number, number]) {
+  return (data[index] - color[0]) ** 2 + (data[index + 1] - color[1]) ** 2 + (data[index + 2] - color[2]) ** 2;
+}
+
+function sampleBackgroundColor(data: Uint8ClampedArray, width: number, height: number): [number, number, number] {
+  const points: Array<[number, number]> = [
+    [2, 2],
+    [width - 3, 2],
+    [2, height - 3],
+    [width - 3, height - 3],
+    [Math.floor(width / 2), 2],
+    [Math.floor(width / 2), height - 3],
+  ];
+  const samples = points.map(([x, y]) => {
+    const index = (Math.max(0, Math.min(height - 1, y)) * width + Math.max(0, Math.min(width - 1, x))) * 4;
+    return [data[index], data[index + 1], data[index + 2]] as [number, number, number];
+  });
+  return [0, 1, 2].map((channel) => {
+    const sorted = samples.map((sample) => sample[channel]).sort((a, b) => a - b);
+    return sorted[Math.floor(sorted.length / 2)];
+  }) as [number, number, number];
+}
+
+function floodBackground(data: Uint8ClampedArray, width: number, height: number, background: [number, number, number]) {
+  const backgroundMask = new Uint8Array(width * height);
+  const stack: number[] = [];
+  const threshold = 48 ** 2;
+  const push = (x: number, y: number) => {
+    if (x < 0 || y < 0 || x >= width || y >= height) return;
+    const pixel = y * width + x;
+    if (backgroundMask[pixel]) return;
+    const index = pixel * 4;
+    if (data[index + 3] < 8 || colorDistanceSquared(data, index, background) <= threshold) {
+      backgroundMask[pixel] = 1;
+      stack.push(pixel);
+    }
+  };
+  for (let x = 0; x < width; x += 1) {
+    push(x, 0);
+    push(x, height - 1);
+  }
+  for (let y = 0; y < height; y += 1) {
+    push(0, y);
+    push(width - 1, y);
+  }
+  while (stack.length) {
+    const current = stack.pop()!;
+    const x = current % width;
+    const y = Math.floor(current / width);
+    push(x - 1, y);
+    push(x + 1, y);
+    push(x, y - 1);
+    push(x, y + 1);
+  }
+  return backgroundMask;
+}
+
+interface MaskComponent {
+  pixels: number[];
+  area: number;
+  minX: number;
+  minY: number;
+  maxX: number;
+  maxY: number;
+}
+
+function findMaskComponents(mask: Uint8Array, width: number) {
+  const visited = new Uint8Array(mask.length);
+  const components: MaskComponent[] = [];
+  const stack: number[] = [];
+  for (let start = 0; start < mask.length; start += 1) {
+    if (!mask[start] || visited[start]) continue;
+    visited[start] = 1;
+    stack.push(start);
+    const pixels: number[] = [];
+    let minX = width;
+    let minY = Math.ceil(mask.length / width);
+    let maxX = 0;
+    let maxY = 0;
+    while (stack.length) {
+      const current = stack.pop()!;
+      pixels.push(current);
+      const x = current % width;
+      const y = Math.floor(current / width);
+      minX = Math.min(minX, x);
+      minY = Math.min(minY, y);
+      maxX = Math.max(maxX, x);
+      maxY = Math.max(maxY, y);
+      for (const next of [current - 1, current + 1, current - width, current + width]) {
+        if (next < 0 || next >= mask.length || visited[next] || !mask[next]) continue;
+        const nx = next % width;
+        const ny = Math.floor(next / width);
+        if (Math.abs(nx - x) + Math.abs(ny - y) !== 1) continue;
+        visited[next] = 1;
+        stack.push(next);
+      }
+    }
+    components.push({ pixels, area: pixels.length, minX, minY, maxX, maxY });
+  }
+  return components.sort((a, b) => b.area - a.area);
+}
+
+function boxesIntersect(a: MaskComponent, b: MaskComponent, padding: number) {
+  return !(a.maxX + padding < b.minX || b.maxX + padding < a.minX || a.maxY + padding < b.minY || b.maxY + padding < a.minY);
+}
+
+function suggestedBorderForType(type: string): [number, number, number, number] {
+  const label = type.replace(/\d+$/, '').toLowerCase();
+  if (label.includes('panel') || label.includes('button') || label.includes('card') || label.includes('dialog') || label.includes('banner') || /面板|按钮|卡片|对话框|横幅/.test(type)) {
+    return [24, 24, 24, 24];
+  }
+  if (label.includes('progress') || /进度/.test(type)) return [18, 8, 18, 8];
+  return [0, 0, 0, 0];
+}
+
+function postProcessComponentCell(sourceCanvas: HTMLCanvasElement, type: string, index: number): SliceAsset {
+  const width = sourceCanvas.width;
+  const height = sourceCanvas.height;
+  const context = sourceCanvas.getContext('2d', { willReadFrequently: true });
+  if (!context) throw new Error('浏览器不支持 Canvas');
+  const imageData = context.getImageData(0, 0, width, height);
+  const data = imageData.data;
+  const background = sampleBackgroundColor(data, width, height);
+  const backgroundMask = floodBackground(data, width, height, background);
+  const foregroundMask = new Uint8Array(width * height);
+  for (let pixel = 0; pixel < foregroundMask.length; pixel += 1) {
+    const offset = pixel * 4;
+    const alpha = data[offset + 3];
+    const nearBackground = colorDistanceSquared(data, offset, background) < 30 ** 2;
+    if (alpha > 16 && !backgroundMask[pixel] && !nearBackground) foregroundMask[pixel] = 1;
+  }
+
+  const components = findMaskComponents(foregroundMask, width).filter((component) => component.area > 36);
+  const main = components[0];
+  if (!main) {
     return {
       id: crypto.randomUUID(),
       name: `${String(index + 1).padStart(2, '0')}_${type}_normal.png`,
-      dataUrl: canvas.toDataURL('image/png'),
-      width: 352,
-      height: 212,
+      dataUrl: sourceCanvas.toDataURL('image/png'),
+      width,
+      height,
       category: type,
       state: 'normal',
-      suggestedBorder: [42, 42, 42, 42],
+      suggestedBorder: suggestedBorderForType(type),
     };
+  }
+
+  const keepMask = new Uint8Array(width * height);
+  const keep = components.filter((component) => component === main || boxesIntersect(main, component, 18) || component.area > main.area * 0.45);
+  let minX = width;
+  let minY = height;
+  let maxX = 0;
+  let maxY = 0;
+  keep.forEach((component) => {
+    component.pixels.forEach((pixel) => { keepMask[pixel] = 1; });
+    minX = Math.min(minX, component.minX);
+    minY = Math.min(minY, component.minY);
+    maxX = Math.max(maxX, component.maxX);
+    maxY = Math.max(maxY, component.maxY);
   });
+
+  for (let pixel = 0; pixel < keepMask.length; pixel += 1) {
+    if (keepMask[pixel]) continue;
+    data[pixel * 4 + 3] = 0;
+  }
+
+  const padding = 12;
+  const cropX = Math.max(0, minX - padding);
+  const cropY = Math.max(0, minY - padding);
+  const cropRight = Math.min(width, maxX + padding + 1);
+  const cropBottom = Math.min(height, maxY + padding + 1);
+  const cropWidth = Math.max(1, cropRight - cropX);
+  const cropHeight = Math.max(1, cropBottom - cropY);
+  context.putImageData(imageData, 0, 0);
+
+  const canvas = document.createElement('canvas');
+  canvas.width = cropWidth;
+  canvas.height = cropHeight;
+  const outputContext = canvas.getContext('2d');
+  if (!outputContext) throw new Error('浏览器不支持 Canvas');
+  outputContext.drawImage(sourceCanvas, cropX, cropY, cropWidth, cropHeight, 0, 0, cropWidth, cropHeight);
+  return {
+    id: crypto.randomUUID(),
+    name: `${String(index + 1).padStart(2, '0')}_${type}_normal.png`,
+    dataUrl: canvas.toDataURL('image/png'),
+    width: cropWidth,
+    height: cropHeight,
+    category: type,
+    state: 'normal',
+    suggestedBorder: suggestedBorderForType(type),
+  };
 }
 
 export function dataUrlToBlob(dataUrl: string) {

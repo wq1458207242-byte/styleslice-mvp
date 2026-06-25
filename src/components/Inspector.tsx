@@ -1,5 +1,6 @@
 import { Copy, Download, GitBranch, ImagePlus, Play, RotateCcw, Trash2 } from 'lucide-react';
-import type { ChangeEvent } from 'react';
+import { useState } from 'react';
+import type { ChangeEvent, MouseEvent } from 'react';
 import { COMPONENT_CATEGORIES, componentTypesFromPlan, normalizeComponentPlan, selectedComponentSpecs } from '../data/componentCatalog';
 import type { ComponentSpec, WorkflowEdge, WorkflowNode, WorkflowNodeData } from '../types/workflow';
 
@@ -14,6 +15,11 @@ interface InspectorProps {
   onDuplicate: (id: string) => void;
   onDecomposeImages: (id: string) => void;
   onExport: () => void;
+}
+
+interface PreviewTarget {
+  src: string;
+  alt: string;
 }
 
 function parseCustomTypes(value: string) {
@@ -150,6 +156,8 @@ export function Inspector({
   onDecomposeImages,
   onExport,
 }: InspectorProps) {
+  const [previewTarget, setPreviewTarget] = useState<PreviewTarget | null>(null);
+
   if (selectedEdge && !node) {
     return (
       <aside className="inspector">
@@ -185,6 +193,12 @@ export function Inspector({
   }
 
   const updateText = (event: ChangeEvent<HTMLTextAreaElement>) => onChange(node.id, { text: event.target.value });
+  const handleInspectorImageClick = (event: MouseEvent<HTMLElement>) => {
+    const target = event.target as HTMLElement;
+    const image = target.closest('img') as HTMLImageElement | null;
+    if (!image?.src) return;
+    setPreviewTarget({ src: image.src, alt: image.alt || image.title || '图像预览' });
+  };
   const uploadImages = async (event: ChangeEvent<HTMLInputElement>) => {
     const files = Array.from(event.target.files ?? []).slice(0, 5);
     const images = await Promise.all(files.map((file) => new Promise<{ id: string; name: string; dataUrl: string }>((resolve, reject) => {
@@ -197,7 +211,8 @@ export function Inspector({
   };
 
   return (
-    <aside className="inspector">
+    <>
+    <aside className="inspector" onClick={handleInspectorImageClick}>
       <div className="panel-heading">
         <div><span className="eyebrow">INSPECT</span><h2>{node.data.title}</h2></div>
         <div className="panel-actions">
@@ -253,7 +268,10 @@ export function Inspector({
                 <button
                   className={`image-thumb-button ${index === (node.data.activeImageIndex ?? 0) ? 'active' : ''}`}
                   key={image.id}
-                  onClick={() => onChange(node.id, { activeImageIndex: index })}
+                  onClick={() => {
+                    onChange(node.id, { activeImageIndex: index });
+                    setPreviewTarget({ src: image.dataUrl, alt: image.name });
+                  }}
                   title={`设为主图：${image.name}`}
                   type="button"
                 >
@@ -357,5 +375,13 @@ export function Inspector({
         {node.data.kind === 'export' && <button className="secondary-button" onClick={onExport}><Download size={15} />下载 ZIP</button>}
       </div>
     </aside>
+    {previewTarget && (
+      <div className="image-lightbox" role="dialog" aria-modal="true" aria-label="图像放大预览" onClick={() => setPreviewTarget(null)}>
+        <button className="image-lightbox-close" type="button" aria-label="关闭图像预览" onClick={() => setPreviewTarget(null)}>×</button>
+        <img src={previewTarget.src} alt={previewTarget.alt} onClick={(event) => event.stopPropagation()} />
+        <span>{previewTarget.alt}</span>
+      </div>
+    )}
+    </>
   );
 }

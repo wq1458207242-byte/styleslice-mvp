@@ -1225,6 +1225,9 @@ export function Workspace() {
             fitViewOptions={{ padding: 0.16 }}
             minZoom={0.35}
             maxZoom={1.6}
+            selectionOnDrag
+            panOnDrag={[1, 2]}
+            selectNodesOnDrag={false}
             colorMode="dark"
           >
             <Background variant={BackgroundVariant.Dots} gap={22} size={1.1} color="#333844" />
